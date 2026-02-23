@@ -1,0 +1,3 @@
+[extension]
+name = "zip"
+path = "rust/target/{profile}/libvo_zip"

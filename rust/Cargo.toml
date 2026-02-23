@@ -1,0 +1,25 @@
+[package]
+name = "vo-zip"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Vo wrapper for zip crate"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = ["native"]
+native = ["dep:linkme", "dep:vo-ext", "dep:vo-ffi-macro", "dep:vo-runtime", "vo-ext/native", "vo-runtime/std"]
+
+[dependencies]
+zip = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+walkdir = "2"
+vo-ext = { git = "https://github.com/vo-lang/volang", default-features = false, optional = true }
+vo-ffi-macro = { git = "https://github.com/vo-lang/volang", optional = true }
+vo-runtime = { git = "https://github.com/vo-lang/volang", default-features = false, optional = true }
+linkme = { version = "0.3", optional = true }
+
+[workspace]
