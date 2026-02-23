@@ -42,6 +42,10 @@ mod native {
         output_dir: String,
     }
 
+    fn empty_ok() -> Result<Vec<u8>, String> {
+        Ok(Vec::new())
+    }
+
     fn zip_options() -> SimpleFileOptions {
         SimpleFileOptions::default().compression_method(CompressionMethod::Deflated)
     }
@@ -51,6 +55,7 @@ mod native {
         let mut buf = Cursor::new(Vec::new());
         let mut writer = ZipWriter::new(&mut buf);
         for e in req.entries {
+            validate_entry_name(&e.name)?;
             writer
                 .start_file(e.name, zip_options())
                 .map_err(|e| e.to_string())?;
@@ -71,6 +76,7 @@ mod native {
             if file.is_dir() {
                 continue;
             }
+            validate_entry_name(file.name())?;
             let mut data = Vec::new();
             file.read_to_end(&mut data).map_err(|e| e.to_string())?;
             entries.push(Entry {
@@ -82,6 +88,24 @@ mod native {
         serde_json::to_vec(&json!({ "entries": entries })).map_err(|e| e.to_string())
     }
 
+    fn handle_list_names(input: &str) -> Result<Vec<u8>, String> {
+        let req: UnpackReq = serde_json::from_str(input).map_err(|e| e.to_string())?;
+        let cursor = Cursor::new(req.data);
+        let mut archive = ZipArchive::new(cursor).map_err(|e| e.to_string())?;
+
+        let mut names = Vec::new();
+        for i in 0..archive.len() {
+            let file = archive.by_index(i).map_err(|e| e.to_string())?;
+            if file.is_dir() {
+                continue;
+            }
+            validate_entry_name(file.name())?;
+            names.push(file.name().to_string());
+        }
+
+        serde_json::to_vec(&json!({ "names": names })).map_err(|e| e.to_string())
+    }
+
     fn rel_name(base: &Path, path: &Path) -> Result<String, String> {
         let rel = path
             .strip_prefix(base)
@@ -89,7 +113,7 @@ mod native {
         Ok(rel.to_string_lossy().replace('\\', "/"))
     }
 
-    fn safe_out_path(base: &Path, name: &str) -> Result<PathBuf, String> {
+    fn validate_entry_name(name: &str) -> Result<(), String> {
         let rel = Path::new(name);
         if rel.components().any(|c| {
             matches!(
@@ -99,6 +123,12 @@ mod native {
         }) {
             return Err(format!("invalid zip entry path: {name}"));
         }
+        Ok(())
+    }
+
+    fn safe_out_path(base: &Path, name: &str) -> Result<PathBuf, String> {
+        validate_entry_name(name)?;
+        let rel = Path::new(name);
         Ok(base.join(rel))
     }
 
@@ -115,6 +145,7 @@ mod native {
                 continue;
             }
             let name = rel_name(&input_dir, path)?;
+            validate_entry_name(&name)?;
             writer
                 .start_file(name, zip_options())
                 .map_err(|e| e.to_string())?;
@@ -125,7 +156,7 @@ mod native {
         }
 
         writer.finish().map_err(|e| e.to_string())?;
-        Ok(Vec::new())
+        empty_ok()
     }
 
     fn handle_unpack_to_dir(input: &str) -> Result<Vec<u8>, String> {
@@ -149,13 +180,14 @@ mod native {
             std::io::copy(&mut file, &mut out_file).map_err(|e| e.to_string())?;
         }
 
-        Ok(Vec::new())
+        empty_ok()
     }
 
     fn dispatch(op: &str, input: &str) -> Result<Vec<u8>, String> {
         match op {
             "pack" => handle_pack(input),
             "unpack" => handle_unpack(input),
+            "list_names" => handle_list_names(input),
             "pack_dir" => handle_pack_dir(input),
             "unpack_to_dir" => handle_unpack_to_dir(input),
             _ => Err(format!("unsupported operation: {op}")),

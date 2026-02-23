@@ -3,50 +3,94 @@ package zip
 import "encoding/json"
 
 type Entry struct {
-Name string `json:"name"`
-Data []byte `json:"data"`
+    Name string `json:"name"`
+    Data []byte `json:"data"`
+}
+
+func marshalReq(v any) (string, error) {
+    b, err := json.Marshal(v)
+    if err != nil {
+        return "", err
+    }
+    return string(b), nil
 }
 
 func Pack(entries []Entry) ([]byte, error) {
-req, _ := json.Marshal(struct {
-Entries []Entry `json:"entries"`
-}{entries})
-return RawCall("pack", string(req))
+    req, err := marshalReq(struct {
+        Entries []Entry `json:"entries"`
+    }{entries})
+    if err != nil {
+        return nil, err
+    }
+    return RawCall("pack", req)
+}
+
+func PackFiles(entries []Entry) ([]byte, error) {
+    return Pack(entries)
 }
 
 func Unpack(data []byte) ([]Entry, error) {
-req, _ := json.Marshal(struct {
-Data []byte `json:"data"`
-}{data})
-resp, err := RawCall("unpack", string(req))
-if err != nil {
-return nil, err
+    req, err := marshalReq(struct {
+        Data []byte `json:"data"`
+    }{data})
+    if err != nil {
+        return nil, err
+    }
+    resp, err := RawCall("unpack", req)
+    if err != nil {
+        return nil, err
+    }
+    var out struct {
+        Entries []Entry `json:"entries"`
+    }
+    if err = json.Unmarshal(resp, &out); err != nil {
+        return nil, err
+    }
+    return out.Entries, nil
 }
-var out struct {
-Entries []Entry `json:"entries"`
-}
-if err = json.Unmarshal(resp, &out); err != nil {
-return nil, err
-}
-return out.Entries, nil
+
+func ListNames(data []byte) ([]string, error) {
+    req, err := marshalReq(struct {
+        Data []byte `json:"data"`
+    }{data})
+    if err != nil {
+        return nil, err
+    }
+    resp, err := RawCall("list_names", req)
+    if err != nil {
+        return nil, err
+    }
+    var out struct {
+        Names []string `json:"names"`
+    }
+    if err = json.Unmarshal(resp, &out); err != nil {
+        return nil, err
+    }
+    return out.Names, nil
 }
 
 func PackDir(inputDir string, outputZip string) error {
-req, _ := json.Marshal(struct {
-InputDir  string `json:"input_dir"`
-OutputZip string `json:"output_zip"`
-}{inputDir, outputZip})
-_, err := RawCall("pack_dir", string(req))
-return err
+    req, err := marshalReq(struct {
+        InputDir  string `json:"input_dir"`
+        OutputZip string `json:"output_zip"`
+    }{inputDir, outputZip})
+    if err != nil {
+        return err
+    }
+    _, err = RawCall("pack_dir", req)
+    return err
 }
 
 func UnpackToDir(inputZip string, outputDir string) error {
-req, _ := json.Marshal(struct {
-InputZip  string `json:"input_zip"`
-OutputDir string `json:"output_dir"`
-}{inputZip, outputDir})
-_, err := RawCall("unpack_to_dir", string(req))
-return err
+    req, err := marshalReq(struct {
+        InputZip  string `json:"input_zip"`
+        OutputDir string `json:"output_dir"`
+    }{inputZip, outputDir})
+    if err != nil {
+        return err
+    }
+    _, err = RawCall("unpack_to_dir", req)
+    return err
 }
 
 func RawCall(op string, input string) ([]byte, error)
