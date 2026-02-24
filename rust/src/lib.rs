@@ -220,8 +220,8 @@ mod native {
     #[vo_fn("github.com/vo-lang/zip", "nativeValidate")]
     pub fn native_validate(call: &mut ExternCallContext) -> ExternResult {
         match validate_impl(call.arg_bytes(0)) {
-            Ok(()) => write_nil_error(call, 0),
-            Err(m) => write_error_to(call, 0, &m),
+            Ok(()) => { call.ret_nil(0); write_nil_error(call, 1); }
+            Err(m) => { call.ret_nil(0); write_error_to(call, 1, &m); }
         }
         ExternResult::Ok
     }
