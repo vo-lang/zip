@@ -1,96 +1,143 @@
 package zip
 
-import "encoding/json"
+import (
+"encoding/json"
+"os"
+"path/filepath"
+)
 
 type Entry struct {
-    Name string `json:"name"`
-    Data []byte `json:"data"`
+Name string `json:"name"`
+Data []byte `json:"data"`
 }
 
-func marshalReq(v any) (string, error) {
-    b, err := json.Marshal(v)
-    if err != nil {
-        return "", err
-    }
-    return string(b), nil
+type EntryInfo struct {
+Name           string `json:"name"`
+CompressedSize int64  `json:"compressed_size"`
+Size           int64  `json:"size"`
+IsDir          bool   `json:"is_dir"`
 }
 
 func Pack(entries []Entry) ([]byte, error) {
-    req, err := marshalReq(struct {
-        Entries []Entry `json:"entries"`
-    }{entries})
-    if err != nil {
-        return nil, err
-    }
-    return RawCall("pack", req)
+payload, err := json.Marshal(struct {
+Entries []Entry `json:"entries"`
+}{entries})
+if err != nil {
+return nil, err
+}
+return nativePack(payload)
 }
 
 func PackFiles(entries []Entry) ([]byte, error) {
-    return Pack(entries)
+return Pack(entries)
 }
 
 func Unpack(data []byte) ([]Entry, error) {
-    req, err := marshalReq(struct {
-        Data []byte `json:"data"`
-    }{data})
-    if err != nil {
-        return nil, err
-    }
-    resp, err := RawCall("unpack", req)
-    if err != nil {
-        return nil, err
-    }
-    var out struct {
-        Entries []Entry `json:"entries"`
-    }
-    if err = json.Unmarshal(resp, &out); err != nil {
-        return nil, err
-    }
-    return out.Entries, nil
+payload, err := nativeUnpack(data)
+if err != nil {
+return nil, err
+}
+var out struct {
+Entries []Entry `json:"entries"`
+}
+if err = json.Unmarshal(payload, &out); err != nil {
+return nil, err
+}
+return out.Entries, nil
 }
 
 func ListNames(data []byte) ([]string, error) {
-    req, err := marshalReq(struct {
-        Data []byte `json:"data"`
-    }{data})
-    if err != nil {
-        return nil, err
-    }
-    resp, err := RawCall("list_names", req)
-    if err != nil {
-        return nil, err
-    }
-    var out struct {
-        Names []string `json:"names"`
-    }
-    if err = json.Unmarshal(resp, &out); err != nil {
-        return nil, err
-    }
-    return out.Names, nil
+payload, err := nativeListNames(data)
+if err != nil {
+return nil, err
+}
+var out struct {
+Names []string `json:"names"`
+}
+if err = json.Unmarshal(payload, &out); err != nil {
+return nil, err
+}
+return out.Names, nil
 }
 
+func ListEntries(data []byte) ([]EntryInfo, error) {
+payload, err := nativeListEntries(data)
+if err != nil {
+return nil, err
+}
+var out struct {
+Entries []EntryInfo `json:"entries"`
+}
+if err = json.Unmarshal(payload, &out); err != nil {
+return nil, err
+}
+return out.Entries, nil
+}
+
+func Validate(data []byte) error {
+return nativeValidate(data)
+}
+
+// PackDir packs a directory tree into a zip archive file.
+// Implemented in pure Vo using filepath.WalkDir so it works on all platforms,
+// including WASM with VFS.
 func PackDir(inputDir string, outputZip string) error {
-    req, err := marshalReq(struct {
-        InputDir  string `json:"input_dir"`
-        OutputZip string `json:"output_zip"`
-    }{inputDir, outputZip})
-    if err != nil {
-        return err
-    }
-    _, err = RawCall("pack_dir", req)
-    return err
+var entries []Entry
+err := filepath.WalkDir(inputDir, func(path string, d *os.DirEntry, walkErr error) error {
+if walkErr != nil {
+return walkErr
+}
+if d.IsDir() {
+return nil
+}
+rel, err := filepath.Rel(inputDir, path)
+if err != nil {
+return err
+}
+data, err := os.ReadFile(path)
+if err != nil {
+return err
+}
+entries = append(entries, Entry{Name: rel, Data: data})
+return nil
+})
+if err != nil {
+return err
+}
+archive, err := Pack(entries)
+if err != nil {
+return err
+}
+return os.WriteFile(outputZip, archive, 0644)
 }
 
+// UnpackToDir extracts a zip archive into the given directory.
+// Implemented in pure Vo using os.WriteFile so it works on all platforms,
+// including WASM with VFS.
 func UnpackToDir(inputZip string, outputDir string) error {
-    req, err := marshalReq(struct {
-        InputZip  string `json:"input_zip"`
-        OutputDir string `json:"output_dir"`
-    }{inputZip, outputDir})
-    if err != nil {
-        return err
-    }
-    _, err = RawCall("unpack_to_dir", req)
-    return err
+data, err := os.ReadFile(inputZip)
+if err != nil {
+return err
+}
+entries, err := Unpack(data)
+if err != nil {
+return err
+}
+for _, e := range entries {
+outPath := filepath.Join([]string{outputDir, e.Name})
+dir := filepath.Dir(outPath)
+if err = os.MkdirAll(dir, 0755); err != nil {
+return err
+}
+if err = os.WriteFile(outPath, e.Data, 0644); err != nil {
+return err
+}
+}
+return nil
 }
 
-func RawCall(op string, input string) ([]byte, error)
+func nativePack(entriesJSON []byte) ([]byte, error)
+func nativeUnpack(data []byte) ([]byte, error)
+func nativeListNames(data []byte) ([]byte, error)
+func nativeListEntries(data []byte) ([]byte, error)
+func nativeValidate(data []byte) error

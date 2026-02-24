@@ -14,6 +14,8 @@ import "github.com/vo-lang/zip"
 - `PackFiles(entries)`
 - `Unpack(data)`
 - `ListNames(data)`
+- `ListEntries(data)`
+- `Validate(data)`
 - `PackDir(inputDir, outputZip)`
 - `UnpackToDir(inputZip, outputDir)`
 
