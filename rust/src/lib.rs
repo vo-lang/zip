@@ -220,8 +220,8 @@ mod native {
     #[vo_fn("github.com/vo-lang/zip", "nativeValidate")]
     pub fn native_validate(call: &mut ExternCallContext) -> ExternResult {
         match validate_impl(call.arg_bytes(0)) {
-            Ok(()) => { call.ret_nil(0); write_nil_error(call, 1); }
-            Err(m) => { call.ret_nil(0); write_error_to(call, 1, &m); }
+            Ok(()) => write_nil_error(call, 0),
+            Err(m) => write_error_to(call, 0, &m),
         }
         ExternResult::Ok
     }
@@ -400,12 +400,13 @@ mod standalone {
         }
     }
 
-    // nativeValidate returns only error. Return non-empty on success to signal no-error.
+    // nativeValidate: Convention B (error-only).
+    // NULL + out_len=0 = success (nil error); non-NULL bytes = UTF-8 error message.
     #[no_mangle]
     pub extern "C" fn nativeValidate(ptr: *const u8, len: u32, out_len: *mut u32) -> *mut u8 {
         match validate_impl(input_bytes(ptr, len)) {
-            Ok(()) => alloc_output(b"ok", out_len),
-            Err(_) => { unsafe { *out_len = 0; } std::ptr::null_mut() }
+            Ok(()) => { unsafe { *out_len = 0; } std::ptr::null_mut() }
+            Err(e) => alloc_output(e.as_bytes(), out_len),
         }
     }
 

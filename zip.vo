@@ -75,8 +75,7 @@ return out.Entries, nil
 }
 
 func Validate(data []byte) error {
-	_, err := nativeValidate(data)
-	return err
+	return nativeValidate(data)
 }
 
 // PackDir packs a directory tree into a zip archive file.
@@ -141,4 +140,4 @@ func nativePack(entriesJSON []byte) ([]byte, error)
 func nativeUnpack(data []byte) ([]byte, error)
 func nativeListNames(data []byte) ([]byte, error)
 func nativeListEntries(data []byte) ([]byte, error)
-func nativeValidate(data []byte) ([]byte, error)
+func nativeValidate(data []byte) error
