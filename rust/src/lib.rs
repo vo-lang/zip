@@ -344,6 +344,12 @@ vo_ext::export_extensions!();
 mod standalone {
     use super::{pack_impl, unpack_impl, list_names_impl, list_entries_impl, validate_impl};
 
+    // v2 tagged protocol output tags (mirrors ext_bridge.rs constants)
+    const TAG_NIL_ERROR: u8 = 0xE0;
+    const TAG_ERROR_STR: u8 = 0xE1;
+    const TAG_BYTES:     u8 = 0xE3;
+    const TAG_NIL_REF:   u8 = 0xE4;
+
     #[no_mangle]
     pub extern "C" fn vo_alloc(size: u32) -> *mut u8 {
         let mut buf = Vec::<u8>::with_capacity(size as usize);
@@ -364,62 +370,109 @@ mod standalone {
         ptr
     }
 
-    fn input_bytes<'a>(ptr: *const u8, len: u32) -> &'a [u8] {
+    /// Decode the first [u32 LE len][bytes] entry from a tagged input buffer.
+    fn read_bytes_arg(buf: &[u8]) -> &[u8] {
+        if buf.len() < 4 { return &[]; }
+        let len = u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]) as usize;
+        if 4 + len > buf.len() { return &buf[4..]; }
+        &buf[4..4 + len]
+    }
+
+    /// Tagged output: success []byte + nil error  →  [0xE3][u32 len][bytes][0xE0]
+    fn tagged_bytes_ok(data: &[u8], out_len: *mut u32) -> *mut u8 {
+        let mut buf = Vec::with_capacity(5 + data.len() + 1);
+        buf.push(TAG_BYTES);
+        buf.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        buf.extend_from_slice(data);
+        buf.push(TAG_NIL_ERROR);
+        alloc_output(&buf, out_len)
+    }
+
+    /// Tagged output: nil []byte + error string  →  [0xE4][0xE1][u16 len][msg]
+    fn tagged_bytes_err(msg: &str, out_len: *mut u32) -> *mut u8 {
+        let mb = msg.as_bytes();
+        let mlen = mb.len().min(0xFFFF) as u16;
+        let mut buf = Vec::with_capacity(4 + mlen as usize);
+        buf.push(TAG_NIL_REF);
+        buf.push(TAG_ERROR_STR);
+        buf.extend_from_slice(&mlen.to_le_bytes());
+        buf.extend_from_slice(&mb[..mlen as usize]);
+        alloc_output(&buf, out_len)
+    }
+
+    /// Tagged output: nil error only  →  [0xE0]
+    fn tagged_nil_error(out_len: *mut u32) -> *mut u8 {
+        alloc_output(&[TAG_NIL_ERROR], out_len)
+    }
+
+    /// Tagged output: error string only  →  [0xE1][u16 len][msg]
+    fn tagged_error_only(msg: &str, out_len: *mut u32) -> *mut u8 {
+        let mb = msg.as_bytes();
+        let mlen = mb.len().min(0xFFFF) as u16;
+        let mut buf = Vec::with_capacity(3 + mlen as usize);
+        buf.push(TAG_ERROR_STR);
+        buf.extend_from_slice(&mlen.to_le_bytes());
+        buf.extend_from_slice(&mb[..mlen as usize]);
+        alloc_output(&buf, out_len)
+    }
+
+    fn raw_input<'a>(ptr: *const u8, len: u32) -> &'a [u8] {
         unsafe { std::slice::from_raw_parts(ptr, len as usize) }
     }
 
     #[no_mangle]
     pub extern "C" fn nativePack(ptr: *const u8, len: u32, out_len: *mut u32) -> *mut u8 {
-        match pack_impl(input_bytes(ptr, len)) {
-            Ok(b) => alloc_output(&b, out_len),
-            Err(_) => { unsafe { *out_len = 0; } std::ptr::null_mut() }
+        let data = read_bytes_arg(raw_input(ptr, len));
+        match pack_impl(data) {
+            Ok(b)  => tagged_bytes_ok(&b, out_len),
+            Err(e) => tagged_bytes_err(&e.to_string(), out_len),
         }
     }
 
     #[no_mangle]
     pub extern "C" fn nativeUnpack(ptr: *const u8, len: u32, out_len: *mut u32) -> *mut u8 {
-        match unpack_impl(input_bytes(ptr, len)) {
-            Ok(b) => alloc_output(&b, out_len),
-            Err(_) => { unsafe { *out_len = 0; } std::ptr::null_mut() }
+        let data = read_bytes_arg(raw_input(ptr, len));
+        match unpack_impl(data) {
+            Ok(b)  => tagged_bytes_ok(&b, out_len),
+            Err(e) => tagged_bytes_err(&e.to_string(), out_len),
         }
     }
 
     #[no_mangle]
     pub extern "C" fn nativeListNames(ptr: *const u8, len: u32, out_len: *mut u32) -> *mut u8 {
-        match list_names_impl(input_bytes(ptr, len)) {
-            Ok(b) => alloc_output(&b, out_len),
-            Err(_) => { unsafe { *out_len = 0; } std::ptr::null_mut() }
+        let data = read_bytes_arg(raw_input(ptr, len));
+        match list_names_impl(data) {
+            Ok(b)  => tagged_bytes_ok(&b, out_len),
+            Err(e) => tagged_bytes_err(&e.to_string(), out_len),
         }
     }
 
     #[no_mangle]
     pub extern "C" fn nativeListEntries(ptr: *const u8, len: u32, out_len: *mut u32) -> *mut u8 {
-        match list_entries_impl(input_bytes(ptr, len)) {
-            Ok(b) => alloc_output(&b, out_len),
-            Err(_) => { unsafe { *out_len = 0; } std::ptr::null_mut() }
+        let data = read_bytes_arg(raw_input(ptr, len));
+        match list_entries_impl(data) {
+            Ok(b)  => tagged_bytes_ok(&b, out_len),
+            Err(e) => tagged_bytes_err(&e.to_string(), out_len),
         }
     }
 
-    // nativeValidate: Convention B (error-only).
-    // NULL + out_len=0 = success (nil error); non-NULL bytes = UTF-8 error message.
     #[no_mangle]
     pub extern "C" fn nativeValidate(ptr: *const u8, len: u32, out_len: *mut u32) -> *mut u8 {
-        match validate_impl(input_bytes(ptr, len)) {
-            Ok(()) => { unsafe { *out_len = 0; } std::ptr::null_mut() }
-            Err(e) => alloc_output(e.as_bytes(), out_len),
+        let data = read_bytes_arg(raw_input(ptr, len));
+        match validate_impl(data) {
+            Ok(())  => tagged_nil_error(out_len),
+            Err(e) => tagged_error_only(&e, out_len),
         }
     }
 
     // nativePackDir / nativeUnpackToDir require file system — not supported in WASM standalone.
     #[no_mangle]
     pub extern "C" fn nativePackDir(_ptr: *const u8, _len: u32, out_len: *mut u32) -> *mut u8 {
-        unsafe { *out_len = 0; }
-        std::ptr::null_mut()
+        tagged_bytes_err("nativePackDir: not supported in WASM", out_len)
     }
 
     #[no_mangle]
     pub extern "C" fn nativeUnpackToDir(_ptr: *const u8, _len: u32, out_len: *mut u32) -> *mut u8 {
-        unsafe { *out_len = 0; }
-        std::ptr::null_mut()
+        tagged_error_only("nativeUnpackToDir: not supported in WASM", out_len)
     }
 }
