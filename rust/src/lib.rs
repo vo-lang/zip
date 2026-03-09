@@ -1,4 +1,5 @@
 use std::io::{Cursor, Read, Write};
+use std::collections::HashSet;
 use std::path::{Component, Path};
 
 use serde::{Deserialize, Serialize};
@@ -27,23 +28,96 @@ struct PackReq {
     entries: Vec<Entry>,
 }
 
+struct ArchiveEntryData {
+    name: String,
+    compressed_size: i64,
+    size: i64,
+    is_dir: bool,
+    data: Vec<u8>,
+}
+
 // ── Shared helpers ────────────────────────────────────────────────────────────
 
 fn zip_options() -> SimpleFileOptions {
     SimpleFileOptions::default().compression_method(CompressionMethod::Deflated)
 }
 
-fn validate_entry_name(name: &str) -> Result<(), String> {
-    let rel = Path::new(name);
-    if rel.components().any(|c| {
-        matches!(
-            c,
-            Component::ParentDir | Component::RootDir | Component::Prefix(_)
-        )
-    }) {
+fn normalize_entry_name(name: &str) -> Result<String, String> {
+    let normalized = name.replace('\\', "/");
+    let mut parts = Vec::new();
+    for component in Path::new(&normalized).components() {
+        match component {
+            Component::CurDir => {}
+            Component::Normal(part) => parts.push(part.to_string_lossy().into_owned()),
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                return Err(format!("invalid zip entry path: {name}"));
+            }
+        }
+    }
+    if parts.is_empty() {
         return Err(format!("invalid zip entry path: {name}"));
     }
+    Ok(parts.join("/"))
+}
+
+fn normalize_archive_entry_name(name: &str, is_dir: bool) -> Result<(String, String), String> {
+    let normalized = normalize_entry_name(name)?;
+    let display_name = if is_dir {
+        format!("{normalized}/")
+    } else {
+        normalized.clone()
+    };
+    Ok((display_name, normalized))
+}
+
+fn insert_seen_name(seen: &mut HashSet<String>, name: &str) -> Result<(), String> {
+    if !seen.insert(name.to_string()) {
+        return Err(format!("duplicate zip entry path: {name}"));
+    }
     Ok(())
+}
+
+fn collect_archive_entries_from_archive<R: Read + std::io::Seek>(
+    archive: &mut ZipArchive<R>,
+    include_dirs: bool,
+    read_contents: bool,
+) -> Result<Vec<ArchiveEntryData>, String> {
+    let mut seen = HashSet::new();
+    let mut entries = Vec::new();
+    for i in 0..archive.len() {
+        let mut file = archive.by_index(i).map_err(|e| e.to_string())?;
+        let is_dir = file.is_dir();
+        let (name, collision_name) = normalize_archive_entry_name(file.name(), is_dir)?;
+        insert_seen_name(&mut seen, &collision_name)?;
+        let compressed_size = i64::try_from(file.compressed_size())
+            .map_err(|_| "compressed size out of range".to_string())?;
+        let size = i64::try_from(file.size()).map_err(|_| "size out of range".to_string())?;
+        let mut contents = Vec::new();
+        if !is_dir && read_contents {
+            file.read_to_end(&mut contents).map_err(|e| e.to_string())?;
+        }
+        if is_dir && !include_dirs {
+            continue;
+        }
+        entries.push(ArchiveEntryData {
+            name,
+            compressed_size,
+            size,
+            is_dir,
+            data: contents,
+        });
+    }
+    Ok(entries)
+}
+
+fn collect_archive_entries(
+    data: &[u8],
+    include_dirs: bool,
+    read_contents: bool,
+) -> Result<Vec<ArchiveEntryData>, String> {
+    let cursor = Cursor::new(data);
+    let mut archive = ZipArchive::new(cursor).map_err(|e| e.to_string())?;
+    collect_archive_entries_from_archive(&mut archive, include_dirs, read_contents)
 }
 
 // ── Pure in-memory implementations (available to both native and wasm-standalone)
@@ -52,9 +126,11 @@ pub fn pack_impl(entries_json: &[u8]) -> Result<Vec<u8>, String> {
     let req: PackReq = serde_json::from_slice(entries_json).map_err(|e| e.to_string())?;
     let mut buf = Cursor::new(Vec::new());
     let mut writer = ZipWriter::new(&mut buf);
+    let mut seen = HashSet::new();
     for e in req.entries {
-        validate_entry_name(&e.name)?;
-        writer.start_file(e.name, zip_options()).map_err(|e| e.to_string())?;
+        let name = normalize_entry_name(&e.name)?;
+        insert_seen_name(&mut seen, &name)?;
+        writer.start_file(name, zip_options()).map_err(|e| e.to_string())?;
         writer.write_all(&e.data).map_err(|e| e.to_string())?;
     }
     writer.finish().map_err(|e| e.to_string())?;
@@ -62,60 +138,36 @@ pub fn pack_impl(entries_json: &[u8]) -> Result<Vec<u8>, String> {
 }
 
 pub fn unpack_impl(data: &[u8]) -> Result<Vec<u8>, String> {
-    let cursor = Cursor::new(data);
-    let mut archive = ZipArchive::new(cursor).map_err(|e| e.to_string())?;
     let mut entries = Vec::new();
-    for i in 0..archive.len() {
-        let mut file = archive.by_index(i).map_err(|e| e.to_string())?;
-        if file.is_dir() { continue; }
-        validate_entry_name(file.name())?;
-        let mut contents = Vec::new();
-        file.read_to_end(&mut contents).map_err(|e| e.to_string())?;
-        entries.push(Entry { name: file.name().to_string(), data: contents });
+    for entry in collect_archive_entries(data, false, true)? {
+        entries.push(Entry { name: entry.name, data: entry.data });
     }
     serde_json::to_vec(&json!({ "entries": entries })).map_err(|e| e.to_string())
 }
 
 pub fn list_names_impl(data: &[u8]) -> Result<Vec<u8>, String> {
-    let cursor = Cursor::new(data);
-    let mut archive = ZipArchive::new(cursor).map_err(|e| e.to_string())?;
     let mut names = Vec::new();
-    for i in 0..archive.len() {
-        let file = archive.by_index(i).map_err(|e| e.to_string())?;
-        if file.is_dir() { continue; }
-        validate_entry_name(file.name())?;
-        names.push(file.name().to_string());
+    for entry in collect_archive_entries(data, false, false)? {
+        names.push(entry.name);
     }
     serde_json::to_vec(&json!({ "names": names })).map_err(|e| e.to_string())
 }
 
 pub fn list_entries_impl(data: &[u8]) -> Result<Vec<u8>, String> {
-    let cursor = Cursor::new(data);
-    let mut archive = ZipArchive::new(cursor).map_err(|e| e.to_string())?;
     let mut entries = Vec::new();
-    for i in 0..archive.len() {
-        let file = archive.by_index(i).map_err(|e| e.to_string())?;
-        validate_entry_name(file.name())?;
-        let compressed_size = i64::try_from(file.compressed_size())
-            .map_err(|_| "compressed size out of range".to_string())?;
-        let size = i64::try_from(file.size()).map_err(|_| "size out of range".to_string())?;
+    for entry in collect_archive_entries(data, true, false)? {
         entries.push(EntryInfo {
-            name: file.name().to_string(),
-            compressed_size,
-            size,
-            is_dir: file.is_dir(),
+            name: entry.name,
+            compressed_size: entry.compressed_size,
+            size: entry.size,
+            is_dir: entry.is_dir,
         });
     }
     serde_json::to_vec(&json!({ "entries": entries })).map_err(|e| e.to_string())
 }
 
 pub fn validate_impl(data: &[u8]) -> Result<(), String> {
-    let cursor = Cursor::new(data);
-    let mut archive = ZipArchive::new(cursor).map_err(|e| e.to_string())?;
-    for i in 0..archive.len() {
-        let file = archive.by_index(i).map_err(|e| e.to_string())?;
-        validate_entry_name(file.name())?;
-    }
+    collect_archive_entries(data, true, false)?;
     Ok(())
 }
 
@@ -132,12 +184,28 @@ mod native {
 
     fn rel_name(base: &Path, path: &Path) -> Result<String, String> {
         let rel = path.strip_prefix(base).map_err(|e| format!("strip prefix failed: {e}"))?;
-        Ok(rel.to_string_lossy().replace('\\', "/"))
+        normalize_entry_name(&rel.to_string_lossy())
     }
 
     fn safe_out_path(base: &Path, name: &str) -> Result<PathBuf, String> {
-        validate_entry_name(name)?;
-        Ok(base.join(Path::new(name)))
+        let normalized = normalize_entry_name(name)?;
+        Ok(base.join(Path::new(&normalized)))
+    }
+
+    fn write_archive_entries_to_dir(base: &Path, entries: Vec<ArchiveEntryData>) -> Result<(), String> {
+        fs::create_dir_all(base).map_err(|e| e.to_string())?;
+        for entry in entries {
+            let out_path = safe_out_path(base, &entry.name)?;
+            if entry.is_dir {
+                fs::create_dir_all(&out_path).map_err(|e| e.to_string())?;
+                continue;
+            }
+            if let Some(parent) = out_path.parent() {
+                fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            }
+            fs::write(&out_path, entry.data).map_err(|e| e.to_string())?;
+        }
+        Ok(())
     }
 
     pub fn pack_dir_impl(input_dir: &str, output_zip: &str) -> Result<(), String> {
@@ -149,7 +217,6 @@ mod native {
             let path = entry.path();
             if path.is_dir() { continue; }
             let name = rel_name(&input_dir, path)?;
-            validate_entry_name(&name)?;
             writer.start_file(name, zip_options()).map_err(|e| e.to_string())?;
             let mut f = File::open(path).map_err(|e| e.to_string())?;
             let mut data = Vec::new();
@@ -163,22 +230,9 @@ mod native {
     pub fn unpack_to_dir_impl(input_zip: &str, output_dir: &str) -> Result<(), String> {
         let input = File::open(input_zip).map_err(|e| e.to_string())?;
         let mut archive = ZipArchive::new(input).map_err(|e| e.to_string())?;
+        let entries = collect_archive_entries_from_archive(&mut archive, true, true)?;
         let out_dir = PathBuf::from(output_dir);
-        fs::create_dir_all(&out_dir).map_err(|e| e.to_string())?;
-        for i in 0..archive.len() {
-            let mut file = archive.by_index(i).map_err(|e| e.to_string())?;
-            let out_path = safe_out_path(&out_dir, file.name())?;
-            if file.is_dir() {
-                fs::create_dir_all(&out_path).map_err(|e| e.to_string())?;
-                continue;
-            }
-            if let Some(parent) = out_path.parent() {
-                fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-            }
-            let mut out_file = File::create(&out_path).map_err(|e| e.to_string())?;
-            std::io::copy(&mut file, &mut out_file).map_err(|e| e.to_string())?;
-        }
-        Ok(())
+        write_archive_entries_to_dir(&out_dir, entries)
     }
 
     #[vo_fn("github.com/vo-lang/zip", "nativePack")]
@@ -271,14 +325,40 @@ mod native {
             buf.into_inner()
         }
 
+        fn backslash_malicious_zip_bytes() -> Vec<u8> {
+            let mut buf = Cursor::new(Vec::new());
+            let mut writer = ZipWriter::new(&mut buf);
+            writer.start_file("..\\escape.txt", zip_options())
+                .expect("failed to write malicious backslash entry");
+            writer.write_all(b"boom").expect("failed to write malicious backslash payload");
+            writer.finish().expect("failed to finish malicious backslash zip");
+            buf.into_inner()
+        }
+
+        fn colliding_name_zip_bytes() -> Vec<u8> {
+            let mut buf = Cursor::new(Vec::new());
+            let mut writer = ZipWriter::new(&mut buf);
+            writer.start_file("nested/hello.txt", zip_options())
+                .expect("failed to write first colliding entry");
+            writer.write_all(b"first").expect("failed to write first colliding payload");
+            writer.start_file("nested\\hello.txt", zip_options())
+                .expect("failed to write second colliding entry");
+            writer.write_all(b"second").expect("failed to write second colliding payload");
+            writer.finish().expect("failed to finish colliding zip");
+            buf.into_inner()
+        }
+
+        fn pack_request(entries: Value) -> Vec<u8> {
+            serde_json::to_vec(&json!({ "entries": entries }))
+                .expect("failed to build pack payload")
+        }
+
         #[test]
         fn pack_unpack_and_list_roundtrip() {
-            let req = serde_json::to_vec(&json!({
-                "entries": [
-                    {"name": "a.txt", "data": [65, 66]},
-                    {"name": "nested/b.txt", "data": [67]}
-                ]
-            })).expect("failed to build pack payload");
+            let req = pack_request(json!([
+                {"name": "a.txt", "data": [65, 66]},
+                {"name": "nested/b.txt", "data": [67]}
+            ]));
 
             let zip_data = pack_impl(&req).expect("pack_impl should succeed");
             assert!(!zip_data.is_empty(), "zip data must not be empty");
@@ -306,6 +386,27 @@ mod native {
         }
 
         #[test]
+        fn pack_normalizes_entry_names_and_rejects_collisions() {
+            let req = pack_request(json!([
+                {"name": "nested\\hello.txt", "data": [65]}
+            ]));
+
+            let zip_data = pack_impl(&req).expect("pack_impl should normalize separators");
+            let names_payload = list_names_impl(&zip_data).expect("list_names should succeed");
+            let names_json: Value = serde_json::from_slice(&names_payload)
+                .expect("names payload should be json");
+            let names = names_json["names"].as_array().expect("names must be array");
+            assert_eq!(names.len(), 1, "list_names should return one normalized entry");
+            assert_eq!(names[0].as_str(), Some("nested/hello.txt"), "entry name should use forward slashes");
+
+            let dup_req = pack_request(json!([
+                {"name": "nested/hello.txt", "data": [65]},
+                {"name": "nested\\hello.txt", "data": [66]}
+            ]));
+            assert!(pack_impl(&dup_req).is_err(), "pack_impl must reject duplicate normalized paths");
+        }
+
+        #[test]
         fn path_traversal_is_rejected() {
             let malicious = malicious_zip_bytes();
             assert!(validate_impl(&malicious).is_err(), "validate must reject parent-dir entries");
@@ -324,6 +425,51 @@ mod native {
 
             let escaped = root.join("escape.txt");
             assert!(!escaped.exists(), "malicious entry must not create file outside output dir");
+
+            fs::remove_dir_all(&root).expect("temp dir cleanup should succeed");
+        }
+
+        #[test]
+        fn backslash_path_traversal_is_rejected() {
+            let malicious = backslash_malicious_zip_bytes();
+            assert!(validate_impl(&malicious).is_err(), "validate must reject backslash traversal entries");
+            assert!(unpack_impl(&malicious).is_err(), "unpack must reject backslash traversal entries");
+
+            let root = temp_dir("backslash-traversal");
+            let zip_path = root.join("malicious.zip");
+            fs::write(&zip_path, &malicious).expect("failed to write malicious backslash zip file");
+
+            let out_dir = root.join("out");
+            let result = unpack_to_dir_impl(
+                &zip_path.to_string_lossy(),
+                &out_dir.to_string_lossy(),
+            );
+            assert!(result.is_err(), "unpack_to_dir must reject backslash traversal archive");
+
+            let escaped = root.join("escape.txt");
+            assert!(!escaped.exists(), "backslash traversal entry must not create file outside output dir");
+
+            fs::remove_dir_all(&root).expect("temp dir cleanup should succeed");
+        }
+
+        #[test]
+        fn duplicate_normalized_paths_are_rejected_during_unpack_to_dir() {
+            let colliding = colliding_name_zip_bytes();
+            assert!(validate_impl(&colliding).is_err(), "validate must reject duplicate normalized paths");
+
+            let root = temp_dir("duplicate-normalized");
+            let zip_path = root.join("colliding.zip");
+            fs::write(&zip_path, &colliding).expect("failed to write colliding zip file");
+
+            let out_dir = root.join("out");
+            let result = unpack_to_dir_impl(
+                &zip_path.to_string_lossy(),
+                &out_dir.to_string_lossy(),
+            );
+            assert!(result.is_err(), "unpack_to_dir must reject duplicate normalized paths");
+
+            let written = out_dir.join("nested").join("hello.txt");
+            assert!(!written.exists(), "duplicate normalized paths must not write any output file");
 
             fs::remove_dir_all(&root).expect("temp dir cleanup should succeed");
         }

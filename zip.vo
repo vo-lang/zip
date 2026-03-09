@@ -1,139 +1,124 @@
 package zip
 
 import (
-"encoding/json"
-"os"
-"path/filepath"
+    "encoding/json"
+    "os"
+    "path/filepath"
 )
 
 type Entry struct {
-Name string `json:"name"`
-Data []byte `json:"data"`
+    Name string `json:"name"`
+    Data []byte `json:"data"`
 }
 
 type EntryInfo struct {
-Name           string `json:"name"`
-CompressedSize int64  `json:"compressed_size"`
-Size           int64  `json:"size"`
-IsDir          bool   `json:"is_dir"`
+    Name           string `json:"name"`
+    CompressedSize int64  `json:"compressed_size"`
+    Size           int64  `json:"size"`
+    IsDir          bool   `json:"is_dir"`
+}
+
+type entriesPayload struct {
+    Entries []Entry `json:"entries"`
+}
+
+type namesPayload struct {
+    Names []string `json:"names"`
+}
+
+type entryInfosPayload struct {
+    Entries []EntryInfo `json:"entries"`
 }
 
 func Pack(entries []Entry) ([]byte, error) {
-payload, err := json.Marshal(struct {
-Entries []Entry `json:"entries"`
-}{entries})
-if err != nil {
-return nil, err
-}
-return nativePack(payload)
+    payload := json.Marshal(entriesPayload{Entries: entries})?
+    return nativePack(payload)
 }
 
 func PackFiles(entries []Entry) ([]byte, error) {
-return Pack(entries)
+    return Pack(entries)
 }
 
 func Unpack(data []byte) ([]Entry, error) {
-payload, err := nativeUnpack(data)
-if err != nil {
-return nil, err
-}
-var out struct {
-Entries []Entry `json:"entries"`
-}
-if err = json.Unmarshal(payload, &out); err != nil {
-return nil, err
-}
-return out.Entries, nil
+    payload := nativeUnpack(data)?
+    return decodeEntries(payload)
 }
 
 func ListNames(data []byte) ([]string, error) {
-payload, err := nativeListNames(data)
-if err != nil {
-return nil, err
-}
-var out struct {
-Names []string `json:"names"`
-}
-if err = json.Unmarshal(payload, &out); err != nil {
-return nil, err
-}
-return out.Names, nil
+    payload := nativeListNames(data)?
+    return decodeNames(payload)
 }
 
 func ListEntries(data []byte) ([]EntryInfo, error) {
-payload, err := nativeListEntries(data)
-if err != nil {
-return nil, err
-}
-var out struct {
-Entries []EntryInfo `json:"entries"`
-}
-if err = json.Unmarshal(payload, &out); err != nil {
-return nil, err
-}
-return out.Entries, nil
+    payload := nativeListEntries(data)?
+    return decodeEntryInfos(payload)
 }
 
 func Validate(data []byte) error {
-	return nativeValidate(data)
+    return nativeValidate(data)
+}
+
+func decodeEntries(payload []byte) ([]Entry, error) {
+    out := entriesPayload{}
+    json.Unmarshal(payload, &out)?
+    return out.Entries, nil
+}
+
+func decodeNames(payload []byte) ([]string, error) {
+    out := namesPayload{}
+    json.Unmarshal(payload, &out)?
+    return out.Names, nil
+}
+
+func decodeEntryInfos(payload []byte) ([]EntryInfo, error) {
+    out := entryInfosPayload{}
+    json.Unmarshal(payload, &out)?
+    return out.Entries, nil
+}
+
+func collectDirEntries(inputDir string) ([]Entry, error) {
+    var entries []Entry
+    filepath.WalkDir(inputDir, func(path string, d *os.DirEntry, walkErr error) error {
+        if walkErr != nil {
+            return walkErr
+        }
+        if d.IsDir() {
+            return nil
+        }
+        rel := filepath.Rel(inputDir, path)?
+        data := os.ReadFile(path)?
+        entries = append(entries, Entry{Name: filepath.ToSlash(rel), Data: data})
+        return nil
+    })?
+    return entries, nil
+}
+
+func writeEntries(outputDir string, entries []Entry) error {
+    for _, e := range entries {
+        outPath := filepath.Join([]string{outputDir, e.Name})
+        dir := filepath.Dir(outPath)
+        os.MkdirAll(dir, 0755)?
+        os.WriteFile(outPath, e.Data, 0644)?
+    }
+    return nil
 }
 
 // PackDir packs a directory tree into a zip archive file.
 // Implemented in pure Vo using filepath.WalkDir so it works on all platforms,
 // including WASM with VFS.
 func PackDir(inputDir string, outputZip string) error {
-var entries []Entry
-err := filepath.WalkDir(inputDir, func(path string, d *os.DirEntry, walkErr error) error {
-if walkErr != nil {
-return walkErr
-}
-if d.IsDir() {
-return nil
-}
-rel, err := filepath.Rel(inputDir, path)
-if err != nil {
-return err
-}
-data, err := os.ReadFile(path)
-if err != nil {
-return err
-}
-entries = append(entries, Entry{Name: rel, Data: data})
-return nil
-})
-if err != nil {
-return err
-}
-archive, err := Pack(entries)
-if err != nil {
-return err
-}
-return os.WriteFile(outputZip, archive, 0644)
+    entries := collectDirEntries(inputDir)?
+    archive := Pack(entries)?
+    return os.WriteFile(outputZip, archive, 0644)
 }
 
 // UnpackToDir extracts a zip archive into the given directory.
 // Implemented in pure Vo using os.WriteFile so it works on all platforms,
 // including WASM with VFS.
 func UnpackToDir(inputZip string, outputDir string) error {
-data, err := os.ReadFile(inputZip)
-if err != nil {
-return err
-}
-entries, err := Unpack(data)
-if err != nil {
-return err
-}
-for _, e := range entries {
-outPath := filepath.Join([]string{outputDir, e.Name})
-dir := filepath.Dir(outPath)
-if err = os.MkdirAll(dir, 0755); err != nil {
-return err
-}
-if err = os.WriteFile(outPath, e.Data, 0644); err != nil {
-return err
-}
-}
-return nil
+    data := os.ReadFile(inputZip)?
+    entries := Unpack(data)?
+    return writeEntries(outputDir, entries)
 }
 
 func nativePack(entriesJSON []byte) ([]byte, error)

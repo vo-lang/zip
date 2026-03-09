@@ -1105,7 +1105,6 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 [[package]]
 name = "vo-common"
 version = "0.1.0"
-source = "git+https://github.com/vo-lang/volang#9082209042a63dd4ef9c5764ec2d79ae90807e15"
 dependencies = [
  "codespan-reporting",
  "rustc-hash",
@@ -1117,7 +1116,6 @@ dependencies = [
 [[package]]
 name = "vo-common-core"
 version = "0.1.0"
-source = "git+https://github.com/vo-lang/volang#9082209042a63dd4ef9c5764ec2d79ae90807e15"
 dependencies = [
  "hashbrown 0.15.5",
  "num_enum",
@@ -1127,7 +1125,6 @@ dependencies = [
 [[package]]
 name = "vo-ext"
 version = "0.1.0"
-source = "git+https://github.com/vo-lang/volang#9082209042a63dd4ef9c5764ec2d79ae90807e15"
 dependencies = [
  "linkme",
  "vo-ffi-macro",
@@ -1137,7 +1134,6 @@ dependencies = [
 [[package]]
 name = "vo-ffi-macro"
 version = "0.1.0"
-source = "git+https://github.com/vo-lang/volang#9082209042a63dd4ef9c5764ec2d79ae90807e15"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1150,7 +1146,6 @@ dependencies = [
 [[package]]
 name = "vo-module"
 version = "0.1.0"
-source = "git+https://github.com/vo-lang/volang#9082209042a63dd4ef9c5764ec2d79ae90807e15"
 dependencies = [
  "base64",
  "dirs",
@@ -1168,7 +1163,6 @@ dependencies = [
 [[package]]
 name = "vo-runtime"
 version = "0.1.0"
-source = "git+https://github.com/vo-lang/volang#9082209042a63dd4ef9c5764ec2d79ae90807e15"
 dependencies = [
  "dirs",
  "hashbrown 0.15.5",
@@ -1187,7 +1181,6 @@ dependencies = [
 [[package]]
 name = "vo-syntax"
 version = "0.1.0"
-source = "git+https://github.com/vo-lang/volang#9082209042a63dd4ef9c5764ec2d79ae90807e15"
 dependencies = [
  "logos",
  "num-bigint",

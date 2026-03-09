@@ -26,14 +26,35 @@ func main() {
 	names, err := zip.ListNames(archive)
 	assert(err == nil, "zip.ListNames succeeds")
 	assert(len(names) == 2, "zip.ListNames returns 2 entries")
+	assert(hasName(names, "a.txt"), "zip.ListNames contains a.txt")
+	assert(hasName(names, "nested/b.txt"), "zip.ListNames contains nested/b.txt")
 
 	listed, err := zip.ListEntries(archive)
 	assert(err == nil, "zip.ListEntries succeeds")
 	assert(len(listed) == 2, "zip.ListEntries returns 2 entries")
+	assert(hasEntry(listed, "a.txt"), "zip.ListEntries contains a.txt")
+	assert(hasEntry(listed, "nested/b.txt"), "zip.ListEntries contains nested/b.txt")
 
 	unpacked, err := zip.Unpack(archive)
 	assert(err == nil, "zip.Unpack succeeds")
 	assert(len(unpacked) == 2, "zip.Unpack returns 2 files")
+
+	normalizedArchive, err := zip.Pack([]zip.Entry{{Name: "nested\\hello.txt", Data: []byte("hello")}})
+	assert(err == nil, "zip.Pack normalizes backslash paths")
+
+	normalizedNames, err := zip.ListNames(normalizedArchive)
+	assert(err == nil, "zip.ListNames succeeds for normalized archive")
+	assert(len(normalizedNames) == 1, "normalized archive returns 1 entry")
+	assert(normalizedNames[0] == "nested/hello.txt", "zip.ListNames normalizes entry separators")
+
+	_, err = zip.Pack([]zip.Entry{{Name: "../bad.txt", Data: []byte("bad")}})
+	assert(err != nil, "zip.Pack rejects parent traversal entry")
+
+	_, err = zip.Pack([]zip.Entry{
+		{Name: "nested/hello.txt", Data: []byte("a")},
+		{Name: "nested\\hello.txt", Data: []byte("b")},
+	})
+	assert(err != nil, "zip.Pack rejects duplicate normalized paths")
 
 	srcDir := filepath.Join([]string{tmpDir, "src"})
 	err = os.MkdirAll(srcDir, 0755)
@@ -52,4 +73,22 @@ func main() {
 	content, err := os.ReadFile(filepath.Join([]string{outDir, "hello.txt"}))
 	assert(err == nil, "read unpacked file")
 	assert(string(content) == "hello zip", "unpacked file content matches")
+}
+
+func hasName(names []string, target string) bool {
+	for _, name := range names {
+		if name == target {
+			return true
+		}
+	}
+	return false
+}
+
+func hasEntry(entries []zip.EntryInfo, target string) bool {
+	for _, entry := range entries {
+		if entry.Name == target {
+			return true
+		}
+	}
+	return false
 }
