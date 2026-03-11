@@ -1645,3 +1645,11 @@ dependencies = [
  "log",
  "simd-adler32",
 ]
+
+[[patch.unused]]
+name = "vo-stdlib"
+version = "0.1.0"
+
+[[patch.unused]]
+name = "vo-vm"
+version = "0.1.0"

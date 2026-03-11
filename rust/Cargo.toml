@@ -24,13 +24,4 @@ vo-runtime = { git = "https://github.com/vo-lang/volang", default-features = fal
 linkme = { version = "0.3", optional = true }
 
 
-[patch."https://github.com/vo-lang/volang"]
-vo-common = { path = "../../volang/lang/crates/vo-common" }
-vo-ext = { path = "../../volang/lang/crates/vo-ext" }
-vo-ffi-macro = { path = "../../volang/lang/crates/vo-ffi-macro" }
-vo-module = { path = "../../volang/lang/crates/vo-module" }
-vo-runtime = { path = "../../volang/lang/crates/vo-runtime" }
-vo-syntax = { path = "../../volang/lang/crates/vo-syntax" }
-
-
 [workspace]
