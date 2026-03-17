@@ -235,7 +235,7 @@ mod native {
         write_archive_entries_to_dir(&out_dir, entries)
     }
 
-    #[vo_fn("github.com/vo-lang/zip", "nativePack")]
+    #[vo_fn("zip", "nativePack")]
     pub fn native_pack(call: &mut ExternCallContext) -> ExternResult {
         match pack_impl(call.arg_bytes(0)) {
             Ok(b) => { let r = call.alloc_bytes(&b); call.ret_ref(0, r); write_nil_error(call, 1); }
@@ -244,7 +244,7 @@ mod native {
         ExternResult::Ok
     }
 
-    #[vo_fn("github.com/vo-lang/zip", "nativeUnpack")]
+    #[vo_fn("zip", "nativeUnpack")]
     pub fn native_unpack(call: &mut ExternCallContext) -> ExternResult {
         match unpack_impl(call.arg_bytes(0)) {
             Ok(b) => { let r = call.alloc_bytes(&b); call.ret_ref(0, r); write_nil_error(call, 1); }
@@ -253,7 +253,7 @@ mod native {
         ExternResult::Ok
     }
 
-    #[vo_fn("github.com/vo-lang/zip", "nativeListNames")]
+    #[vo_fn("zip", "nativeListNames")]
     pub fn native_list_names(call: &mut ExternCallContext) -> ExternResult {
         match list_names_impl(call.arg_bytes(0)) {
             Ok(b) => { let r = call.alloc_bytes(&b); call.ret_ref(0, r); write_nil_error(call, 1); }
@@ -262,7 +262,7 @@ mod native {
         ExternResult::Ok
     }
 
-    #[vo_fn("github.com/vo-lang/zip", "nativeListEntries")]
+    #[vo_fn("zip", "nativeListEntries")]
     pub fn native_list_entries(call: &mut ExternCallContext) -> ExternResult {
         match list_entries_impl(call.arg_bytes(0)) {
             Ok(b) => { let r = call.alloc_bytes(&b); call.ret_ref(0, r); write_nil_error(call, 1); }
@@ -271,7 +271,7 @@ mod native {
         ExternResult::Ok
     }
 
-    #[vo_fn("github.com/vo-lang/zip", "nativeValidate")]
+    #[vo_fn("zip", "nativeValidate")]
     pub fn native_validate(call: &mut ExternCallContext) -> ExternResult {
         match validate_impl(call.arg_bytes(0)) {
             Ok(()) => write_nil_error(call, 0),
@@ -280,7 +280,7 @@ mod native {
         ExternResult::Ok
     }
 
-    #[vo_fn("github.com/vo-lang/zip", "nativePackDir")]
+    #[vo_fn("zip", "nativePackDir")]
     pub fn native_pack_dir(call: &mut ExternCallContext) -> ExternResult {
         match pack_dir_impl(call.arg_str(0), call.arg_str(1)) {
             Ok(()) => write_nil_error(call, 0),
@@ -289,7 +289,7 @@ mod native {
         ExternResult::Ok
     }
 
-    #[vo_fn("github.com/vo-lang/zip", "nativeUnpackToDir")]
+    #[vo_fn("zip", "nativeUnpackToDir")]
     pub fn native_unpack_to_dir(call: &mut ExternCallContext) -> ExternResult {
         match unpack_to_dir_impl(call.arg_str(0), call.arg_str(1)) {
             Ok(()) => write_nil_error(call, 0),
