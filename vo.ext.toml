@@ -1,3 +1,7 @@
 [extension]
 name = "zip"
 path = "rust/target/{profile}/libvo_zip"
+
+[extension.wasm]
+type = "standalone"
+wasm = "zip.wasm"
